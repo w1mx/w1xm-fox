@@ -22,22 +22,20 @@
 #define DEBUGln(input) Serial.println(input)
 #define DEBUGHEX(input, param) Serial.print(input, param)
 
-RFM69 radio;
+#define PIN_RFM69_RESET 3
 
-int MODE;
+RFM69 radio;
 
 #define SIDETONE_HZ 800
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
   pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(3, OUTPUT);
-  digitalWrite(3, HIGH);
+  pinMode(PIN_RFM69_RESET, OUTPUT);
+  digitalWrite(PIN_RFM69_RESET, HIGH);
   delayMicroseconds(200);
-  digitalWrite(3, LOW);
+  digitalWrite(PIN_RFM69_RESET, LOW);
   delay(5);
-  //pinMode(0, OUTPUT); digitalWrite(0, LOW);
-  pinMode(A0, INPUT_PULLUP);
 
   DEBUGln("START RFM69_NODE_TX_TEST!");
 
@@ -87,12 +85,7 @@ void setup() {
   DEBUGln("Use:\n+,- to adjust power in _powerLevel steps");
   DEBUGln("<,> to adjust power in dBm");
 
-#ifdef ENABLE_ATC
-  DEBUGln("RFM69_ATC Enabled (Auto Transmission Control)\n");
-#endif
-
-  MODE = RF69_MODE_SLEEP;
-  radio.setMode(MODE);
+  radio.setMode(RF69_MODE_SLEEP);
 }
 
 void key(bool keyed) {
@@ -175,8 +168,9 @@ void transmit(String message)
     }
    tx(false, dotDuration*3);
   }
-  tx(false, 500);
-  tx(true, 5000);
+  tx(false, 1000);
+  // 20s of tone to help DF
+  tx(true, 10000);
   tx(false, 1000);
   while ((radio.readReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_PACKETSENT) == 0x00);
   radio.setMode(RF69_MODE_SLEEP);
@@ -217,29 +211,8 @@ void loop() {
       DEBUG("POWER=");DEBUG(dBm);DEBUG(" (dBm); _powerLevel=");DEBUGln(radio.getPowerLevel());
     }
 
-    //transmit mode toggle (enables unmodulated carrier at current power level)
-    if (input=='t') {
-      if (MODE == RF69_MODE_TX) {
-        MODE = RF69_MODE_SLEEP;
-        DEBUG("RADIO_MODE = 0/SLEEP; _powerLevel=");DEBUGln(radio.getPowerLevel());
-      }
-      else {
-        MODE = RF69_MODE_TX;
-        DEBUG("RADIO_MODE = 4/TX;    _powerLevel=");DEBUGln(radio.getPowerLevel());
-        //for (int i = 0; i < 50; i++) {
-        //  radio.writeReg(REG_FIFO, 0);
-        //}
-      }
-    }
     if (input=='T') {
       transmit("AB1IZ TEST");
     }
   }
-  //while (!(radio.readReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_FIFOFULL)) {
-  //  radio.writeReg(REG_FIFO, 0x55);
-  //}
-  delay(200);
-  if (MODE == RF69_MODE_TX) radio.setMode(MODE);
-  else if (digitalRead(A0)==LOW) radio.setMode(RF69_MODE_TX);
-  else radio.setMode(RF69_MODE_SLEEP);
 }
