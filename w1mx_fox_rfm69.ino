@@ -92,9 +92,8 @@ void key(bool keyed) {
   radio.writeReg(REG_PACKETCONFIG1, RF_PACKET1_FORMAT_FIXED | (keyed ? RF_PACKET1_DCFREE_MANCHESTER : RF_PACKET1_DCFREE_OFF) | RF_PACKET1_CRC_ON | RF_PACKET1_CRCAUTOCLEAR_ON | RF_PACKET1_ADRSFILTERING_OFF);
 }
 
-String alphabet1 = "A.-B-...C-.-.D-..E.F..-.G--.H....I..J.---K-.-L.-..M--N-.O---P.--.Q--.-R.-.S...T-U..-V...-W.--X-..-Y-.--Z--..";
-String alphabet2 = "1.----2..---3...--4....-5.....6-....7--...8---..9----.0-----";
-String alphabet = alphabet1+alphabet2;
+const char* alphabet = "A.-B-...C-.-.D-..E.F..-.G--.H....I..J.---K-.-L.-..M--N-.O---P.--.Q--.-R.-.S...T-U..-V...-W.--X-..-Y-.--Z--.."
+  "1.----2..---3...--4....-5.....6-....7--...8---..9----.0-----";
 
 //Parameter which indirectly sets morsing speed. Higher = slower. Defined in milliseconds.
 //Rule of thumb I derived: 1250 / this number = WPM.
@@ -107,24 +106,15 @@ unsigned long transmitDelay = 150;
 //Tracks the last time we transmitted, so we can do that automatically.
 unsigned long lastTransmissionTime = 0;
 //Takes a character and will return symbols. Example: getMorse("A") returns ".-"
-String getMorse(char letter)
+const char* getMorse(char letter)
 {
-  int letterLocation = alphabet.indexOf(letter);
-  String symbols = "";
-  int count = 1;
-  while(true)
-  {
-    char charIn = alphabet[letterLocation+count];
-    if (charIn == '.' or charIn == '-')
-    {
-      symbols += charIn;
-    }
-    else
-    {
-      return symbols;
-    }
-    count++;
-  } 
+  if (letter >= 'a') {
+    letter -= ('a' - 'A');
+  }
+  char* p = strchr(alphabet, letter);
+  if (p)
+    return p+1;
+  return NULL;
 }
 
 void tx(bool tone, uint32_t ms) {
@@ -152,18 +142,22 @@ void transmit(String message)
   for(int i=0; i<message.length(); i++)
   {
     char letter = message[i];
-    String morse = "";
     if(letter == ' ')
       //Specified delay between words is 7. Down below we pause for 3 so this is the other 4.
       tx(false, dotDuration*4);
-    morse = getMorse(letter);
+    const char* p = getMorse(letter);
     //Transmit each symbol of the current letter
-    for(int j=0; j<morse.length();j++)
-    {
-      if (morse[j] == '.')
-        tx(true, 1*dotDuration);
-      if (morse[j] == '-')
-        tx(true, 3*dotDuration);
+    while (p && *p) {
+      switch (*(p++)) {
+        case '.':
+          tx(true, 1*dotDuration);
+          break;
+        case '-':
+          tx(true, 3*dotDuration);
+          break;
+        default:
+          p = NULL;
+      }
       tx(false, dotDuration);
     }
    tx(false, dotDuration*3);
