@@ -11,6 +11,8 @@
 #include <RFM69.h>      //get it here: https://www.github.com/lowpowerlab/rfm69
 #include <RFM69registers.h>
 
+#include "melody.h"
+
 #define FREQUENCY     RF69_433MHZ
 #define FREQUENCY_EXACT 433930000
 #define IS_RFM69HW_HCW   //uncomment only for RFM69HCW! Leave out if you have RFM69CW!
@@ -27,6 +29,13 @@
 RFM69 radio;
 
 #define SIDETONE_HZ 800
+
+void setRFbitrate(uint32_t hz) {
+  uint16_t rfbitrate = FXOSC/hz/2;
+
+  radio.writeReg(REG_BITRATEMSB, rfbitrate>>8);
+  radio.writeReg(REG_BITRATELSB, rfbitrate);
+}
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
@@ -56,10 +65,7 @@ void setup() {
   radio.writeReg(REG_FDEVMSB, fdev>>8);
   radio.writeReg(REG_FDEVLSB, fdev);
 
-  uint16_t rfbitrate = FXOSC/SIDETONE_HZ/2;
-
-  radio.writeReg(REG_BITRATEMSB, rfbitrate>>8);
-  radio.writeReg(REG_BITRATELSB, rfbitrate);
+  setRFbitrate(SIDETONE_HZ);
 
   // No preamble
   radio.writeReg(REG_PREAMBLEMSB, 0);
@@ -103,8 +109,9 @@ String programMessage = "W1XM FOX HUNT AT MIT";
 //Amount of time to wait between transmissions. In seconds.
 unsigned long transmitDelay = 150;
 
-//Tracks the last time we transmitted, so we can do that automatically.
-unsigned long lastTransmissionTime = 0;
+// Transmit melody every 5 cycles
+const char melodyEvery = 5;
+
 //Takes a character and will return symbols. Example: getMorse("A") returns ".-"
 const char* getMorse(char letter)
 {
@@ -117,18 +124,70 @@ const char* getMorse(char letter)
   return NULL;
 }
 
-void tx(bool tone, uint32_t ms) {
-  uint32_t cycles = ms / (4000 / SIDETONE_HZ);
+void txOne(bool tone, uint32_t ms, uint16_t freq) {
+  uint32_t cycles = ms / (4000 / freq);
   DEBUG(ms);
-  DEBUG(" = ");
+  DEBUG("ms = ");
   DEBUG(cycles);
   DEBUG(" cycles of ");
-  DEBUGln(tone);
+  DEBUGln(tone ? freq : 0);
   while (cycles--) {
     while (radio.readReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_FIFOFULL);
     radio.writeReg(REG_FIFO, tone ? 0x55 : 0);
   }
 }
+
+void tx(bool tone, uint32_t ms, uint32_t gap_ms = 0, uint16_t freq = SIDETONE_HZ) {
+  if (freq != SIDETONE_HZ) {
+      while (radio.readReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_FIFONOTEMPTY);
+      setRFbitrate(freq);
+  }
+  txOne(tone, ms, freq);
+  if (gap_ms)
+    txOne(false, gap_ms, freq);
+  if (freq != SIDETONE_HZ) {
+      while (radio.readReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_FIFONOTEMPTY);
+      setRFbitrate(SIDETONE_HZ);
+  }
+}
+
+void transmitMelody(bool init = false)
+{
+  if (init) {
+    // Preload with a few 0s
+    for (int i = 0; i < 15; i++)
+      radio.writeReg(REG_FIFO, 0);
+    radio.setMode(RF69_MODE_TX);
+  }
+  int divider, noteDuration;
+  for (int thisNote = 0; thisNote < notes * 2; thisNote += 2) {
+    // calculates the duration of each note
+    divider = pgm_read_word_near(melody + thisNote + 1);
+    if (divider > 0) {
+      // regular note, just proceed
+      noteDuration = (wholenote) / divider;
+    } else if (divider < 0) {
+      // dotted notes are represented with negative durations!!
+      noteDuration = (wholenote) / abs(divider);
+      noteDuration *= 1.5; // increases the duration in half for dotted notes
+    }
+
+    // we only play the note for 90% of the duration, leaving 10% as a pause
+    int note = pgm_read_word_near(melody + thisNote);
+    if (note == 0) {
+      tx(false, noteDuration);
+    } else {
+      tx(true, noteDuration*0.9, noteDuration * 0.1, note);
+    }
+  }
+  if (init) {
+    tx(false, 1000);
+    while ((radio.readReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_PACKETSENT) == 0x00);
+    radio.setMode(RF69_MODE_SLEEP);
+  }
+}
+
+int transmit_count = 0;
 
 void transmit(String message)
 {
@@ -163,14 +222,22 @@ void transmit(String message)
    tx(false, dotDuration*3);
   }
   tx(false, 1000);
-  // 20s of tone to help DF
-  tx(true, 10000);
+  if ((++transmit_count) % melodyEvery == 0) {
+    transmitMelody(false);
+  } else {
+    // 20s of tone to help DF
+    tx(true, 10000);
+  }
   tx(false, 1000);
   while ((radio.readReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_PACKETSENT) == 0x00);
   radio.setMode(RF69_MODE_SLEEP);
 }
 
+//Tracks the last time we transmitted, so we can do that automatically.
+unsigned long lastTransmissionTime = 0;
+
 int8_t dBm=-18; //start at minimum possible value for W/CW, gets bumped by library to -2 for HW/HCW
+
 void loop() {
   if (Serial.available() > 0) {
     char input = Serial.read();
@@ -208,5 +275,12 @@ void loop() {
     if (input=='T') {
       transmit("AB1IZ TEST");
     }
+    if (input=='m') {
+      transmitMelody(true);
+    }
+  }
+  if (!lastTransmissionTime || millis() > (lastTransmissionTime + 1000*transmitDelay)) {
+    transmit("W1MX FOX HUNT AT MIT");
+    lastTransmissionTime = millis();
   }
 }
