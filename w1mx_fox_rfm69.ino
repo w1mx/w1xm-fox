@@ -11,7 +11,6 @@
 #include <RFM69.h>      //get it here: https://www.github.com/lowpowerlab/rfm69
 #include <RFM69registers.h>
 
-#include "melody.h"
 
 #define FREQUENCY     RF69_433MHZ
 #define FREQUENCY_EXACT 433930000
@@ -25,6 +24,7 @@
 #define DEBUGHEX(input, param) Serial.print(input, param)
 
 #define PIN_RFM69_RESET 3
+#define PIN_POWER_LED 2
 
 RFM69 radio;
 
@@ -40,6 +40,8 @@ void setRFbitrate(uint32_t hz) {
 void setup() {
   Serial.begin(SERIAL_BAUD);
   pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(PIN_POWER_LED, OUTPUT);
+  digitalWrite(PIN_POWER_LED, HIGH);
   pinMode(PIN_RFM69_RESET, OUTPUT);
   digitalWrite(PIN_RFM69_RESET, HIGH);
   delayMicroseconds(200);
@@ -107,10 +109,8 @@ int dotDuration = 75;
 //This message is what will be transmitted in Morse.
 String programMessage = "W1XM FOX HUNT AT MIT";
 //Amount of time to wait between transmissions. In seconds.
-unsigned long transmitDelay = 150;
+unsigned long transmitDelay = 60;
 
-// Transmit melody every 5 cycles
-const char melodyEvery = 5;
 
 //Takes a character and will return symbols. Example: getMorse("A") returns ".-"
 const char* getMorse(char letter)
@@ -142,48 +142,14 @@ void tx(bool tone, uint32_t ms, uint32_t gap_ms = 0, uint16_t freq = SIDETONE_HZ
       while (radio.readReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_FIFONOTEMPTY);
       setRFbitrate(freq);
   }
+  digitalWrite(PIN_POWER_LED, !tone);
   txOne(tone, ms, freq);
+  digitalWrite(PIN_POWER_LED, HIGH);
   if (gap_ms)
     txOne(false, gap_ms, freq);
   if (freq != SIDETONE_HZ) {
       while (radio.readReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_FIFONOTEMPTY);
       setRFbitrate(SIDETONE_HZ);
-  }
-}
-
-void transmitMelody(bool init = false)
-{
-  if (init) {
-    // Preload with a few 0s
-    for (int i = 0; i < 15; i++)
-      radio.writeReg(REG_FIFO, 0);
-    radio.setMode(RF69_MODE_TX);
-  }
-  int divider, noteDuration;
-  for (int thisNote = 0; thisNote < notes * 2; thisNote += 2) {
-    // calculates the duration of each note
-    divider = pgm_read_word_near(melody + thisNote + 1);
-    if (divider > 0) {
-      // regular note, just proceed
-      noteDuration = (wholenote) / divider;
-    } else if (divider < 0) {
-      // dotted notes are represented with negative durations!!
-      noteDuration = (wholenote) / abs(divider);
-      noteDuration *= 1.5; // increases the duration in half for dotted notes
-    }
-
-    // we only play the note for 90% of the duration, leaving 10% as a pause
-    int note = pgm_read_word_near(melody + thisNote);
-    if (note == 0) {
-      tx(false, noteDuration);
-    } else {
-      tx(true, noteDuration*0.9, noteDuration * 0.1, note);
-    }
-  }
-  if (init) {
-    tx(false, 1000);
-    while ((radio.readReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_PACKETSENT) == 0x00);
-    radio.setMode(RF69_MODE_SLEEP);
   }
 }
 
@@ -222,12 +188,7 @@ void transmit(String message)
    tx(false, dotDuration*3);
   }
   tx(false, 1000);
-  if ((++transmit_count) % melodyEvery == 0) {
-    transmitMelody(false);
-  } else {
-    // 20s of tone to help DF
-    tx(true, 10000);
-  }
+  tx(true, 10000);
   tx(false, 1000);
   while ((radio.readReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_PACKETSENT) == 0x00);
   radio.setMode(RF69_MODE_SLEEP);
@@ -275,8 +236,11 @@ void loop() {
     if (input=='T') {
       transmit("AB1IZ TEST");
     }
-    if (input=='m') {
-      transmitMelody(true);
+    if (input==',') {
+      radio.setMode(RF69_MODE_SLEEP);
+    }
+    if (input=='.') {
+      radio.setMode(RF69_MODE_TX);
     }
   }
   if (!lastTransmissionTime || millis() > (lastTransmissionTime + 1000*transmitDelay)) {
